@@ -4,6 +4,85 @@
 
 ![](figs/recon_comparison_small_alt.png)<br>
 
+## ALICE HPC quick-start
+
+This fork has been adapted to run on the ALICE HPC cluster (Leiden University). If you are on ALICE, you only need four commands to reproduce the baseline. Elsewhere, use the generic [Installation](#installation) section below.
+
+```bash
+# 1. Clone (put the repo somewhere with enough disk — /zfsstore, /data1, etc.)
+git clone https://github.com/KevinOliver99/MindEyeV2.git
+cd MindEyeV2/src
+
+# 2. Create the fmri venv and install all pinned dependencies.
+#    Use `source` (or `.`) so the activated venv stays in your shell.
+source setup.sh
+
+# 3. Download the NSD subset and the frozen model checkpoints (must be run
+#    from inside src/ — the script uses os.getcwd() as the download root).
+python download_data.py
+
+# 4. Create a slurms/ log directory, then submit a job.
+mkdir -p slurms
+sbatch finetune_subj01.slurm
+```
+
+`setup.sh` automatically:
+- runs `module load` for `Python/3.11.5-GCCcore-13.2.0`, `CUDA/12.1.1`, `cuDNN/8.9.2.26-CUDA-12.1.1`, and `PyYAML/6.0.1-GCCcore-13.2.0`;
+- creates the `fmri` virtualenv inside `src/` (reused on re-runs);
+- installs every pinned package from `src/requirements.txt`;
+- installs `dalle2-pytorch` with `--no-deps` to avoid a PyTorch version conflict;
+- runs a smoke-test import of `torch` and `sgm` and reports whether CUDA is visible.
+
+### External models and where they go
+
+`download_data.py` pulls from [`pscotti/mindeyev2`](https://huggingface.co/datasets/pscotti/mindeyev2) into whatever directory you run it from (so run it in `src/`). Everything lands flat in `src/`, which is also the default for both `--data_path` and `--cache_dir` in the training/inference scripts.
+
+**Downloaded automatically into `src/`:**
+
+| File | Role |
+|------|------|
+| `sd_image_var_autoenc.pth` | Diffusers VAE used by the low-level submodule |
+| `convnext_xlarge_alpha0.75_fullckpt.pth` | ConvNeXt features for the blurry reconstruction loss |
+| `bigG_to_L_epoch8.pth` | OpenCLIP-bigG → ViT-L linear converter for unCLIP |
+| `unclip6_epoch0_step110000.ckpt` | SDXL unCLIP checkpoint (the main reconstruction decoder) |
+| `wds/subj0{1..8}/` | Webdataset `.tar` files (~15 GB/subject) |
+| `betas_all_subj0#_fp32_renorm.hdf5` | Preprocessed fMRI voxel betas |
+| `coco_images_224_float16.hdf5` | 224×224 COCO stimulus images |
+| `evals/all_images.pt`, `evals/all_captions.pt`, `evals/all_git_generated_captions.pt` | Ground-truth tensors for evaluation |
+
+**NOT downloaded — fetch only if you need them:**
+
+- **Pretrained MindEye2 checkpoints** (for finetuning or inference without running pretraining). `download_data.py` excludes `train_logs/` entirely. Grab whichever model you need from [huggingface.co/datasets/pscotti/mindeyev2/tree/main/train_logs](https://huggingface.co/datasets/pscotti/mindeyev2/tree/main/train_logs) and place the folder under `../train_logs/` (i.e. `MindEyeV2/train_logs/`). Example:
+  ```bash
+  # from MindEyeV2/
+  mkdir -p train_logs && cd train_logs
+  huggingface-cli download pscotti/mindeyev2 --repo-type dataset \
+      --include "train_logs/multisubject_subj01_1024hid_nolow_300ep/*" \
+      --local-dir .
+  mv train_logs/multisubject_subj01_1024hid_nolow_300ep . && rmdir train_logs
+  ```
+  Then pass `--multisubject_ckpt=../train_logs/multisubject_subj01_1024hid_nolow_300ep` to `Train.py`.
+
+- **`zavychromaxl_v30.safetensors`** (only required by `enhanced_recon_inference.py`, the optional SDXL refinement stage). Not on the HF dataset — download it from [Civitai](https://civitai.com/models/119229) (v3.0) and drop it into `src/` next to the other `.pth`/`.ckpt` files. The script now reads it from `--cache_dir` (defaults to the current directory), so no code edits are needed.
+
+**Fetched automatically at runtime by `transformers`** (no action needed as long as the compute node has internet, or you warm the cache from a login node first): `microsoft/git-large-coco`, `openai/clip-vit-base-patch32`, `openai/clip-vit-large-patch14`.
+
+### Before submitting SLURM jobs
+
+The included `*.slurm` files (e.g. `finetune_subj01.slurm`, `recon_inference.slurm`, `final_evals.slurm`) load the exact same module stack as `setup.sh`, so the venv created on a login node will work unchanged on the compute nodes. You only need to:
+
+1. Edit each `*.slurm` file to replace the hard-coded `cd /home/s4483480/MindEye2/MindEyeV2/src` line with the path to **your** clone.
+2. (Optional) Edit `--partition`, `--time`, `--gres`, and model-config flags for your experiment.
+3. Make sure a `slurms/` directory exists next to the script — SLURM writes `%j.err` / `%j.out` there.
+
+### Useful ALICE partitions
+
+| Partition | Typical use |
+|-----------|-------------|
+| `gpu-short` | Inference / evals (≤ 4 h, A100-40GB) |
+| `gpu-medium` | Finetuning runs up to 48 h |
+| `gpu-a100-80g` | Long training jobs needing A100-80GB |
+
 ## Installation
 
 1. Agree to the Natural Scenes Dataset's [Terms and Conditions](https://cvnlab.slite.page/p/IB6BSeW_7o/Terms-and-Conditions) and fill out the [NSD Data Access form](https://forms.gle/xue2bCdM9LaFNMeb7)

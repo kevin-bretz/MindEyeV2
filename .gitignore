@@ -2,6 +2,35 @@ wandb/
 train_logs/
 slurms/
 
+# Assignment / report files (not part of contribution)
+Assignment 3*
+Grading Assignment 3*
+assignment3_report.*
+MindEye2.pdf
+check_ckpt.py
+generate_report.py
+
+# Large data files
+*.hdf5
+*.npy
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Virtual environment
+src/fmri/
+
+# WebDataset shards
+src/wds/
+
+# Generated evaluation outputs
+src/evals/
+src/tables/
+
+# Generated visualization images
+src/*.png
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

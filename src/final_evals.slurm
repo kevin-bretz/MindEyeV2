@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mindeye_inference
+#SBATCH --job-name=mindeye_eval
 #SBATCH --nodes=1
 #SBATCH --partition=gpu-short
 #SBATCH --gres=gpu:a100:1
@@ -25,30 +25,28 @@ source fmri/bin/activate
 
 # Model configuration
 model_name="finetuned_subj07_1024hid_40sess_low_150ep"
+# Use enhanced reconstructions if available, otherwise use regular recons
+all_recons_path="evals/${model_name}/${model_name}_all_enhancedrecons.pt"
+if [ ! -f "$all_recons_path" ]; then
+    echo "Enhanced recons not found, using regular reconstructions"
+    all_recons_path="evals/${model_name}/${model_name}_all_recons.pt"
+fi
+
 data_path="/home/s4483480/MindEye2/MindEyeV2/src"
 cache_dir="/home/s4483480/MindEye2/MindEyeV2/src"
+subj=7
 
-echo "Running inference on model: ${model_name}"
-echo "Subject: 7"
-echo "Architecture: hidden_dim=1024, n_blocks=4"
+echo "Running final evaluations on model: ${model_name}"
+echo "Reconstructions path: ${all_recons_path}"
+echo "Subject: ${subj}"
 
-# Run regular reconstruction inference
-python recon_inference.py \
+# Run final evaluations
+python final_evaluations.py \
   --model_name=${model_name} \
+  --all_recons_path=${all_recons_path} \
   --data_path=${data_path} \
   --cache_dir=${cache_dir} \
-  --subj=7 \
-  --n_blocks=4 \
-  --hidden_dim=1024 \
-  --blurry_recon \
-  --new_test
+  --subj=${subj} \
+  --seed=42
 
-echo "Regular reconstruction complete!"
-
-# Run enhanced reconstruction (refinement stage)
-python enhanced_recon_inference.py \
-  --model_name=${model_name} \
-  --subj=7
-
-echo "Enhanced reconstruction complete!"
-echo "Results saved to: evals/${model_name}/"
+echo "Evaluation complete! Results saved to tables/${model_name}.csv"
