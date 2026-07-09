@@ -137,8 +137,10 @@ except FileNotFoundError:
 # GIT predicted captions
 all_predcaptions = torch.load(f"evals/{model_name}/{model_name}_all_predcaptions.pt")
 
-# model name
-model_name_plus_suffix = f"{model_name}_all_enhancedrecons" if "enhanced" in all_recons_path else f"{model_name}_all_recons"
+# model name — derive suffix directly from the filename to handle any variant
+import re as _re
+_m = _re.search(r'_(all_[^/]+)\.pt$', all_recons_path)
+model_name_plus_suffix = f"{model_name}_{_m.group(1)}" if _m else f"{model_name}_all_recons"
 print(model_name_plus_suffix)
 print(all_images.shape, all_recons.shape)
 
@@ -217,7 +219,7 @@ for j in np.array([2,165,119,619,231,791]):
     if jj==3: 
         kk+=1; jj=-1
 plt.tight_layout()
-plt.savefig(f'{model_name}_reconstructions_vs_originals.png', dpi=150, bbox_inches='tight')
+plt.savefig(f'{model_name_plus_suffix}_reconstructions_vs_originals.png', dpi=150, bbox_inches='tight')
 print(f"Saved {model_name}_reconstructions_vs_originals.png")
 plt.close()
 
@@ -304,7 +306,7 @@ for trial in range(4):
         ax[trial, attempt+1].set_title(f"Top {attempt+1}")
         ax[trial, attempt+1].axis("off")
 fig.tight_layout()
-plt.savefig(f'{model_name}_retrieval_examples.png', dpi=150, bbox_inches='tight')
+plt.savefig(f'{model_name_plus_suffix}_retrieval_examples.png', dpi=150, bbox_inches='tight')
 print(f"Saved {model_name}_retrieval_examples.png")
 plt.close()
 
@@ -897,7 +899,7 @@ euclidean_dist = np.mean(np.linalg.norm(embedding[:len(data1), :] - embedding[le
 plt.scatter(embedding[:len(data1), 0], embedding[:len(data1), 1], c='blue', label='Images', alpha=.5)
 plt.scatter(embedding[len(data1):, 0], embedding[len(data1):, 1], c=color, label=label, alpha=.5)
 plt.title(f'CLIP Image x Retrieval Submodule\nAvg. euclidean distance = {euclidean_dist:.2f}')
-plt.savefig(f'{model_name}_umap_retrieval.png')
+plt.savefig(f'{model_name_plus_suffix}_umap_retrieval.png')
 print(f"Saved {model_name}_umap_retrieval.png")
 plt.close()
 
@@ -920,7 +922,7 @@ if has_prior_out:
     plt.scatter(embedding[:len(data1), 0], embedding[:len(data1), 1], c='blue', label='Images')
     plt.scatter(embedding[len(data1):, 0], embedding[len(data1):, 1], c=color, label=label)
     plt.title(f'CLIP Image x Diffusion Prior\nAvg. euclidean distance = {euclidean_dist:.2f}')
-    plt.savefig(f'{model_name}_umap_prior.png')
+    plt.savefig(f'{model_name_plus_suffix}_umap_prior.png')
     print(f"Saved {model_name}_umap_prior.png")
     plt.close()
 else:
@@ -945,7 +947,7 @@ if has_backbones:
     plt.scatter(embedding[:len(data1), 0], embedding[:len(data1), 1], c='blue', label='Images')
     plt.scatter(embedding[len(data1):, 0], embedding[len(data1):, 1], c=color, label=label)
     plt.title(f'CLIP Image x MLP Backbone\nAvg. euclidean distance = {euclidean_dist:.2f}')
-    plt.savefig(f'{model_name}_umap_backbone.png')
+    plt.savefig(f'{model_name_plus_suffix}_umap_backbone.png')
     print(f"Saved {model_name}_umap_backbone.png")
     plt.close()
 else:

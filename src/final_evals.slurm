@@ -18,23 +18,20 @@ module load CUDA/12.1.1
 module load cuDNN/8.9.2.26-CUDA-12.1.1
 
 # Navigate to project directory
-cd /home/s4483480/MindEye2/MindEyeV2/src
+cd /home/s4556534/mindEye2/MindEye2/MindEyeV2/src
 
 # Activate virtual environment
 source fmri/bin/activate
 
 # Model configuration
-model_name="finetuned_subj07_1024hid_40sess_low_150ep"
-# Use enhanced reconstructions if available, otherwise use regular recons
-all_recons_path="evals/${model_name}/${model_name}_all_enhancedrecons.pt"
-if [ ! -f "$all_recons_path" ]; then
-    echo "Enhanced recons not found, using regular reconstructions"
-    all_recons_path="evals/${model_name}/${model_name}_all_recons.pt"
-fi
+model_name="finetune_subj02_150ep"
+# Prefer brain-optimized > enhanced > regular reconstructions
 
-data_path="/home/s4483480/MindEye2/MindEyeV2/src"
-cache_dir="/home/s4483480/MindEye2/MindEyeV2/src"
-subj=7
+all_recons_path="evals/${model_name}/${model_name}_all_brain_opt_recons_v2.pt"
+
+data_path="/home/s4556534/mindEye2/MindEye2/MindEyeV2/src"
+cache_dir="/home/s4556534/mindEye2/MindEye2/MindEyeV2/src"
+subj=2
 
 echo "Running final evaluations on model: ${model_name}"
 echo "Reconstructions path: ${all_recons_path}"
