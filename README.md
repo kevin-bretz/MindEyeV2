@@ -42,6 +42,18 @@ python download_data.py
 
 `download_data.py` pulls from [`pscotti/mindeyev2`](https://huggingface.co/datasets/pscotti/mindeyev2) into whatever directory you run it from (so run it in `src/`). Everything lands flat in `src/`, which is also the default for both `--data_path` and `--cache_dir` in the training/inference scripts.
 
+### Trained model checkpoints
+
+The Subject-2 fine-tuned MindEye2 checkpoint used by the extensions — and the multi-subject pretrain it was fine-tuned from — are on the Hugging Face Hub as inference-only weights (no NSD data):
+
+```bash
+# run from the repo root (MindEyeV2/)
+huggingface-cli download kevin-bretz/mindeye2-subj02 \
+    finetuned_subj02_1sess_1024hid_low/last.pth --local-dir train_logs
+```
+
+This lands the checkpoint at `train_logs/finetuned_subj02_1sess_1024hid_low/last.pth`, ready for `recon_inference.py --model_name=finetuned_subj02_1sess_1024hid_low`. To publish checkpoints from your own training runs, use `upload_hf_checkpoint.slurm` on the [`alice`](../../tree/alice) branch.
+
 **Downloaded automatically into `src/`:**
 
 | File | Role |
