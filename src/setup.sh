@@ -1,5 +1,5 @@
 #!/bin/bash
-# MindEye2 setup for the ALICE HPC cluster.
+# MindEye2 environment setup (portable).
 #
 # Creates the `fmri` virtualenv inside the current directory and installs all
 # pinned dependencies. Safe to re-run — it reuses an existing venv.
@@ -23,20 +23,11 @@ if [ ! -f "Train.py" ] || [ ! -d "generative_models" ]; then
     die "run this from MindEyeV2/src/  (got: $(pwd))"
 fi
 
-# --- 2. Load ALICE HPC modules -----------------------------------------------
-# These are required both for the Python interpreter used to build the venv
-# and for CUDA to be visible inside the venv at runtime.
-if command -v module >/dev/null 2>&1; then
-    echo "[1/4] Loading ALICE modules..."
-    module purge
-    module load ALICE/default
-    module load Python/3.11.5-GCCcore-13.2.0
-    module load PyYAML/6.0.1-GCCcore-13.2.0
-    module load CUDA/12.1.1
-    module load cuDNN/8.9.2.26-CUDA-12.1.1
-else
-    echo "[1/4] 'module' command not found — assuming Python 3.11 + CUDA 12.1 are already on PATH."
-fi
+# --- 2. Toolchain ------------------------------------------------------------
+# Requires Python 3.11 and CUDA 12.1 available on PATH. On an HPC cluster with
+# environment modules, load them BEFORE running this script (the `alice` branch
+# ships a setup.sh that loads the exact ALICE module stack).
+echo "[1/4] Using $(command -v python3.11 || echo 'python3.11 — NOT FOUND')"
 
 command -v python3.11 >/dev/null 2>&1 || die "python3.11 not found after loading modules."
 
@@ -87,8 +78,9 @@ Activate it in any new shell with:
 
 Next steps:
   1. Download the NSD subset with:  python download_data.py
-  2. Create a slurms/ directory for SLURM logs:  mkdir -p slurms
-  3. Submit a job, e.g.:  sbatch finetune_subj01.slurm
-     (edit the slurm file first to point to your own project directory).
+  2. Run a stage directly, e.g.:
+       accelerate launch --mixed_precision=fp16 Train.py --model_name=... [args]
+     See the README for per-stage and per-extension commands. Ready-to-run
+     SLURM batch scripts for the ALICE cluster are on the \`alice\` branch.
 
 EOF

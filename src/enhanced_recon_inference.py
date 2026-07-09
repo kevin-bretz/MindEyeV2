@@ -158,9 +158,9 @@ conditioner_config = refiner_params["conditioner_config"]
 scale_factor = refiner_params["scale_factor"]
 disable_first_stage_autocast = refiner_params["disable_first_stage_autocast"]
 
-# base_ckpt_path = '/weka/robin/projects/stable-research/checkpoints/sd_xl_base_1.0.safetensors'
-# base_ckpt_path = '/weka/proj-fmri/paulscotti/stable-research/zavychromaxl_v30.safetensors'
-base_ckpt_path = '/home/s4483480/MindEye2/MindEyeV2/src/zavychromaxl_v30.safetensors'
+# SDXL refinement base checkpoint. Defaults to zavychromaxl_v30.safetensors in
+# the current directory (run from src/); override with the ZAVYCHROMAXL_PATH env var.
+base_ckpt_path = os.environ.get("ZAVYCHROMAXL_PATH", "zavychromaxl_v30.safetensors")
 base_engine = DiffusionEngine(network_config=network_config,
                        denoiser_config=denoiser_config,
                        first_stage_config=first_stage_config,
@@ -235,7 +235,7 @@ if plotting or num_samples>1:
 
 # Per-sample resume: scan evals/{model_name}/enhanced_parts/ for already-done
 # samples, skip them, write each new sample atomically. Lets multi-pass
-# wall-time chained jobs (sbatch afterany) resume from prior progress.
+# chained/resumed jobs resume from prior progress.
 import glob
 enhanced_parts_dir = f"evals/{model_name}/enhanced_parts"
 os.makedirs(enhanced_parts_dir, exist_ok=True)

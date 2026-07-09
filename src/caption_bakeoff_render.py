@@ -64,7 +64,7 @@ def build_sdxl(device):
         sampler_config=sampler_config,
         scale_factor=rp["scale_factor"],
         disable_first_stage_autocast=rp["disable_first_stage_autocast"],
-        ckpt_path="/home/s4483480/MindEye2/MindEyeV2/src/zavychromaxl_v30.safetensors",
+        ckpt_path=os.environ.get("ZAVYCHROMAXL_PATH", "zavychromaxl_v30.safetensors"),
     )
     base_engine.eval().requires_grad_(False).to(device)
 

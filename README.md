@@ -19,36 +19,26 @@ This fork extends MindEye2 with four additions, studied on **Subject 2** of the 
 
 ---
 
-## ALICE HPC quick-start
+> **Running on an HPC cluster?** This `main` branch is cluster-agnostic. Ready-to-run SLURM batch scripts, an ALICE module-loading `setup.sh`, and an ALICE quick-start live on the [`alice`](../../tree/alice) branch.
 
-This fork has been adapted to run on the ALICE HPC cluster (Leiden University). If you are on ALICE, you only need four commands to reproduce the baseline. Elsewhere, use the generic [Installation](#installation) section below.
+## Quick start
 
 ```bash
-# 1. Clone (put the repo somewhere with enough disk — /zfsstore, /data1, etc.)
+# 1. Clone
 git clone https://github.com/kevin-bretz/MindEyeV2.git
 cd MindEyeV2/src
 
-# 2. Create the fmri venv and install all pinned dependencies.
-#    Use `source` (or `.`) so the activated venv stays in your shell.
+# 2. Create the fmri venv + install pinned dependencies. Needs Python 3.11 and
+#    CUDA 12.1 on PATH — load them via your environment modules first if on HPC.
 source setup.sh
 
-# 3. Download the NSD subset and the frozen model checkpoints (must be run
-#    from inside src/ — the script uses os.getcwd() as the download root).
+# 3. Download the NSD subset + frozen checkpoints (run from inside src/).
 python download_data.py
-
-# 4. Create a slurms/ log directory, then submit a job.
-mkdir -p slurms
-sbatch finetune_subj01.slurm
 ```
 
-`setup.sh` automatically:
-- runs `module load` for `Python/3.11.5-GCCcore-13.2.0`, `CUDA/12.1.1`, `cuDNN/8.9.2.26-CUDA-12.1.1`, and `PyYAML/6.0.1-GCCcore-13.2.0`;
-- creates the `fmri` virtualenv inside `src/` (reused on re-runs);
-- installs every pinned package from `src/requirements.txt`;
-- installs `dalle2-pytorch` with `--no-deps` to avoid a PyTorch version conflict;
-- runs a smoke-test import of `torch` and `sgm` and reports whether CUDA is visible.
+`setup.sh` creates the `fmri` virtualenv inside `src/`, installs every pinned package from `requirements.txt`, installs `dalle2-pytorch` with `--no-deps` (to avoid a PyTorch version conflict), and runs a `torch` / `sgm` import smoke test.
 
-### External models and where they go
+## External models and data
 
 `download_data.py` pulls from [`pscotti/mindeyev2`](https://huggingface.co/datasets/pscotti/mindeyev2) into whatever directory you run it from (so run it in `src/`). Everything lands flat in `src/`, which is also the default for both `--data_path` and `--cache_dir` in the training/inference scripts.
 
@@ -80,23 +70,7 @@ sbatch finetune_subj01.slurm
 
 - **`zavychromaxl_v30.safetensors`** (only required by `enhanced_recon_inference.py`, the optional SDXL refinement stage). Not on the HF dataset — download it from [Civitai](https://civitai.com/models/119229) (v3.0) and drop it into `src/` next to the other `.pth`/`.ckpt` files. The script now reads it from `--cache_dir` (defaults to the current directory), so no code edits are needed.
 
-**Fetched automatically at runtime by `transformers`** (no action needed as long as the compute node has internet, or you warm the cache from a login node first): `microsoft/git-large-coco`, `openai/clip-vit-base-patch32`, `openai/clip-vit-large-patch14`.
-
-### Before submitting SLURM jobs
-
-The included `*.slurm` files (e.g. `finetune_subj01.slurm`, `recon_inference.slurm`, `final_evals.slurm`) load the exact same module stack as `setup.sh`, so the venv created on a login node will work unchanged on the compute nodes. You only need to:
-
-1. Edit each `*.slurm` file to replace the hard-coded `cd /home/s4483480/MindEye2/MindEyeV2/src` line with the path to **your** clone.
-2. (Optional) Edit `--partition`, `--time`, `--gres`, and model-config flags for your experiment.
-3. Make sure a `slurms/` directory exists next to the script — SLURM writes `%j.err` / `%j.out` there.
-
-### Useful ALICE partitions
-
-| Partition | Typical use |
-|-----------|-------------|
-| `gpu-short` | Inference / evals (≤ 4 h, A100-40GB) |
-| `gpu-medium` | Finetuning runs up to 48 h |
-| `gpu-a100-80g` | Long training jobs needing A100-80GB |
+**Fetched automatically at runtime by `transformers`** (needs internet on the machine, or warm the cache beforehand): `microsoft/git-large-coco`, `openai/clip-vit-base-patch32`, `openai/clip-vit-large-patch14`.
 
 ## Installation
 
@@ -151,11 +125,11 @@ If you are training MindEye2 on a single GPU on the full 40 sessions, expect tha
 - ```src/recon_inference.ipynb``` will run inference on a pretrained model, outputting tensors of reconstructions/predicted captions/etc.
 - ```src/enhanced_recon_inference.ipynb``` will run the refinement stage for producing better looking reconstructions. These refined reconstructions are saved as *enhancedrecons.pt in the same folder used by recon_inference.ipynb. The unrefined reconstructions were saved as *recons.pt as part of the recon_inference.ipynb notebook.
 - ```src/final_evaluations.ipynb``` will visualize the saved reconstructions and compute quantitative metrics.
-- See .slurm files for example scripts for running the .ipynb notebooks as batch jobs submitted to Slurm job scheduling.
+- Each stage can be run directly as a `.py` script with `argparser` flags (see below). Ready-to-run SLURM batch scripts for the ALICE cluster are on the [`alice`](../../tree/alice) branch.
 
 ## Reproducing the extensions
 
-All four extensions were evaluated on **Subject 2**, using the single-session fine-tuned baseline `finetuned_subj02_1sess_1024hid_low` as the starting reconstruction. Every `*.slurm` script hard-codes an absolute `cd .../src` path and writes logs to `slurms/%j.{out,err}` — edit the path to your own clone and create a `slurms/` directory before submitting.
+All four extensions were evaluated on **Subject 2**, using the single-session fine-tuned baseline `finetuned_subj02_1sess_1024hid_low` as the starting reconstruction. The commands below are the portable `python` entry points; equivalent one-command SLURM batch scripts for the ALICE cluster are on the [`alice`](../../tree/alice) branch. Run them from `src/` with the `fmri` venv activated.
 
 ### 1. Semantic Auxiliary Loss (SemAux)
 
@@ -181,7 +155,6 @@ Inference-time candidate selection over a trained MindEye2 model — the weights
 python brain_optimized_inference_latent.py \
     --model_name=finetuned_subj02_1sess_1024hid_low --subj=2 --new_test \
     --n_candidates=8 --n_iterations=3 --convergence_tol=0.05
-# or submit the batch script:  sbatch src/brain_opt_inference.slurm
 ```
 
 Per-variant candidate count `N`, iteration count `T`, and noise schedule:
@@ -199,28 +172,42 @@ Requires the GNet encoder weights `gnet_multisubject.pt` in `--cache_dir`.
 Instead of starting the unCLIP stage from pure Gaussian noise, initialize it from the blurry reconstruction (encoded through the SDXL VAE) and begin denoising at an intermediate timepoint `T_unCLIP` (`recon_inference.py --use_img2img_init --img2img_timepoint`). The SDXL refinement stage exposes the same control as `T_SDXL` (`enhanced_recon_inference.py --img2img_timepoint`, default 13). Lower values preserve more of the brain-derived structure; higher values give the diffusion prior more freedom.
 
 ```bash
-# T_unCLIP sweep (T_SDXL fixed at its default of 13)
+# T_unCLIP sweep (unCLIP init timepoint), with T_SDXL at its default of 13:
 for tp in 10 15 20 25 30 35; do
-  sbatch --export=ALL,IMG2IMG_TIMEPOINT=$tp src/recon_inference_subj02_tpsweep.slurm
+  python recon_inference.py --model_name=subj02_tp${tp} --subj=2 \
+      --n_blocks=4 --hidden_dim=1024 --blurry_recon --new_test \
+      --use_img2img_init --img2img_timepoint=${tp}
+  python enhanced_recon_inference.py --model_name=subj02_tp${tp} --subj=2
+  python final_evaluations.py        --model_name=subj02_tp${tp} --subj=2
 done
-# the tp=15 job automatically chains the T_SDXL sweep over {8, 18, 23}
+
+# T_SDXL sweep (SDXL refinement timepoint) at T_unCLIP=15, reusing its unCLIP recons:
+for sdxl in 8 13 18 23; do
+  python enhanced_recon_inference.py --model_name=subj02_tp15 --subj=2 --img2img_timepoint=${sdxl}
+  python final_evaluations.py        --model_name=subj02_tp15 --subj=2
+done
 ```
 
-Each job runs `recon_inference.py` (unCLIP stage) → `enhanced_recon_inference.py` (SDXL stage) → `final_evals_subj_sweep.slurm` (metrics). The reported noise-init baseline is a standard run without `--use_img2img_init`.
+The reported noise-init baseline is a standard run without `--use_img2img_init`. Each `subj02_tp*` `model_name` should alias your trained Subject-2 checkpoint under `train_logs/` (the ALICE scripts do this with a symlink).
 
 ### 4. VLM caption ablation
 
 Swap the caption used during SDXL refinement. Both captioners see the ground-truth image, so only the caption text varies across rows. Schema 0 is the NSD ground-truth caption; schemas 1–6 use Qwen2.5-VL-72B-Instruct-AWQ (short, dense, tags, sentence+tags, style, positional); the GIT row uses MindEye2's frozen GIT model on the ground-truth image embedding. All rows refine at `T_SDXL = 15`.
 
 ```bash
-# 1. Generate captions (7 schemas × 50 images; self-provisions a Qwen2.5-VL venv)
-sbatch src/caption_bakeoff_gen.slurm
+# 1. Generate captions (7 schemas × 50 images). Needs a Qwen2.5-VL environment
+#    (transformers, qwen-vl-utils, autoawq); the alice branch provisions one.
+python caption_bakeoff_generate.py --n_images=50 --model_id=Qwen/Qwen2.5-VL-72B-Instruct-AWQ
+
 # 2. Re-refine the Subject-2 recons per caption at T_SDXL=15 and score
-sbatch --export=ALL,SOURCE_MODEL=finetuned_subj02_1sess_1024hid_low,SUBJ=2 \
-       src/caption_bakeoff_render_subj02.slurm
+python caption_bakeoff_render.py \
+    --captions_path=evals/caption_bakeoff/captions.json \
+    --source_model=finetuned_subj02_1sess_1024hid_low \
+    --n_images=50 --output_dir=evals/caption_bakeoff_subj02 \
+    --csv_path=tables/caption_bakeoff_subj02.csv
 ```
 
-The leaderboard is written to `tables/caption_bakeoff_subj02.csv`. Requires the SDXL refinement checkpoint `zavychromaxl_v30.safetensors` (see [External models](#external-models-and-where-they-go)).
+The leaderboard is written to `tables/caption_bakeoff_subj02.csv`. Requires the SDXL refinement checkpoint `zavychromaxl_v30.safetensors` (see [External models](#external-models-and-data)).
 
 ## FAQ
 
