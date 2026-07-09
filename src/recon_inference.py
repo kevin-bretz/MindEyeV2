@@ -101,6 +101,17 @@ parser.add_argument(
 parser.add_argument(
     "--seed",type=int,default=42,
 )
+parser.add_argument(
+    "--use_img2img_init", action=argparse.BooleanOptionalAction, default=False,
+    help="Initialize unCLIP from the decoded blurry recon via SDXL VAE encode + "
+         "noise (SDEdit / Brain-IT style) instead of starting from pure noise.",
+)
+parser.add_argument(
+    "--img2img_timepoint", type=int, default=20,
+    help="T_unCLIP: number of denoising steps to keep, counted from the end of "
+         "the unCLIP schedule. Lower preserves more of the blurry init; higher "
+         "gives the diffusion prior more freedom. Only used with --use_img2img_init.",
+)
 if utils.is_interactive():
     args = parser.parse_args(jupyter_args)
 else:
@@ -475,12 +486,24 @@ with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.float32):
             all_predcaptions = np.hstack((all_predcaptions, generated_caption))
             print(generated_caption)
 
+        # For --use_img2img_init: decode the blurry recon now and build a
+        # 768x768 init image so unclip_recon can SDXL-VAE-encode + noise it to
+        # img2img_timepoint (T_unCLIP) instead of starting from pure noise.
+        init_image_768 = None
+        if use_img2img_init:
+            assert blurry_recon, "--use_img2img_init requires --blurry_recon"
+            _blur = (autoenc.decode(blurry_image_enc/0.18215).sample/2 + 0.5).clamp(0,1)
+            init_image_768 = transforms.Resize((768, 768), antialias=True)(_blur)
+
         # Feed diffusion prior outputs through unCLIP
         for i in range(len(voxel)):
+            init_i = init_image_768[[i]] if init_image_768 is not None else None
             samples = utils.unclip_recon(prior_out[[i]],
                              diffusion_engine,
                              vector_suffix,
-                             num_samples=num_samples_per_image)
+                             num_samples=num_samples_per_image,
+                             init_image=init_i,
+                             img2img_timepoint=img2img_timepoint if use_img2img_init else None)
             if all_recons is None:
                 all_recons = samples.cpu()
             else:

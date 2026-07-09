@@ -79,8 +79,11 @@ parser.add_argument(
     "--seed",type=int,default=42,
 )
 parser.add_argument(
-    "--cache_dir", type=str, default=os.getcwd(),
-    help="Directory containing zavychromaxl_v30.safetensors (SDXL refiner base). Defaults to current directory.",
+    "--img2img_timepoint", type=int, default=13,
+    help="Number of denoising steps to retain from the end of the 25-step SDXL "
+         "refinement schedule. Default 13 matches the published MindEye2 setting. "
+         "Higher = more refinement / more text-prompt drift; lower = lighter "
+         "refinement / closer to the input mix.",
 )
 if utils.is_interactive():
     args = parser.parse_args(jupyter_args)
@@ -98,28 +101,42 @@ utils.seed_everything(seed)
 os.makedirs("evals",exist_ok=True)
 os.makedirs(f"evals/{model_name}",exist_ok=True)
 
+# `plotting` gates which (multi-GB) tensors we bother loading below; defined here
+# (was previously in cell 30) so the lazy-load block can branch on it.
+plotting = False
+if utils.is_interactive(): plotting=True
+
 # Some of these files are downloadable from huggingface: https://huggingface.co/datasets/pscotti/mindeyev2/tree/main/evals
 # The others are obtained from running recon_inference.ipynb first with your desired model
-all_images = torch.load(f"evals/all_images.pt")
-all_recons = torch.load(f"evals/{model_name}/{model_name}_all_recons.pt") # these are the unrefined MindEye2 recons!
-all_clipvoxels = torch.load(f"evals/{model_name}/{model_name}_all_clipvoxels.pt")
-try:
-    all_blurryrecons = torch.load(f"evals/{model_name}/{model_name}_all_blurryrecons.pt")
-    all_blurryrecons = transforms.Resize((768,768))(all_blurryrecons).float()
-    has_blurry_recons = True
-except FileNotFoundError:
-    print(f"Note: No blurry recons found (model trained with --no-blurry_recon)")
-    all_blurryrecons = None
-    has_blurry_recons = False
+#
+# Lazy-load policy: at 9000 training samples a pre-resized 768x768 fp32 stack
+# is ~64 GB and blows the slurm cgroup. Only load tensors we actually consume,
+# and resize per-sample inside the loop instead of eagerly over the whole stack.
+all_recons = torch.load(f"evals/{model_name}/{model_name}_all_recons.pt") # these are the unrefined MindEye2 recons! (kept at 256 here, upsampled per-sample below)
 all_predcaptions = torch.load(f"evals/{model_name}/{model_name}_all_predcaptions.pt")
 
-all_recons = transforms.Resize((768,768))(all_recons).float()
+# These are only consumed inside `if plotting:` blocks, so skip the (multi-GB) loads otherwise.
+if plotting:
+    all_images = torch.load(f"evals/all_images.pt")
+    all_clipvoxels = torch.load(f"evals/{model_name}/{model_name}_all_clipvoxels.pt")
+    try:
+        all_blurryrecons = torch.load(f"evals/{model_name}/{model_name}_all_blurryrecons.pt")
+        all_blurryrecons = transforms.Resize((768,768))(all_blurryrecons).float()
+        has_blurry_recons = True
+    except FileNotFoundError:
+        print(f"Note: No blurry recons found (model trained with --no-blurry_recon)")
+        all_blurryrecons = None
+        has_blurry_recons = False
+else:
+    all_images = None
+    all_clipvoxels = None
+    all_blurryrecons = None
+    has_blurry_recons = False
+
+resize_768 = transforms.Resize((768, 768))
 
 print(model_name)
-if has_blurry_recons:
-    print(all_images.shape, all_recons.shape, all_clipvoxels.shape, all_blurryrecons.shape, all_predcaptions.shape)
-else:
-    print(all_images.shape, all_recons.shape, all_clipvoxels.shape, all_predcaptions.shape)
+print("all_recons", all_recons.shape, "predcaptions", all_predcaptions.shape)
 
 
 # In[29]:
@@ -141,14 +158,9 @@ conditioner_config = refiner_params["conditioner_config"]
 scale_factor = refiner_params["scale_factor"]
 disable_first_stage_autocast = refiner_params["disable_first_stage_autocast"]
 
-base_ckpt_path = f'{cache_dir}/zavychromaxl_v30.safetensors'
-if not os.path.isfile(base_ckpt_path):
-    raise FileNotFoundError(
-        f"Refiner base checkpoint not found at {base_ckpt_path}. "
-        "Download zavychromaxl_v30.safetensors (e.g. from Civitai) "
-        f"and place it in --cache_dir (currently: {cache_dir}), "
-        "or pass a different --cache_dir."
-    )
+# base_ckpt_path = '/weka/robin/projects/stable-research/checkpoints/sd_xl_base_1.0.safetensors'
+# base_ckpt_path = '/weka/proj-fmri/paulscotti/stable-research/zavychromaxl_v30.safetensors'
+base_ckpt_path = '/home/s4483480/MindEye2/MindEyeV2/src/zavychromaxl_v30.safetensors'
 base_engine = DiffusionEngine(network_config=network_config,
                        denoiser_config=denoiser_config,
                        first_stage_config=first_stage_config,
@@ -201,11 +213,10 @@ print("vector_uc", vector_uc.shape)
 # In[30]:
 
 
-plotting = False
-if utils.is_interactive(): plotting=True
-
 num_samples = 1 # PS: I tried increasing this to 16 and picking highest cosine similarity like we did in MindEye1, it didnt seem to increase eval performance!
-img2img_timepoint = 13 # 9 # higher number means more reliance on prompt, less reliance on matching the conditioning image
+# img2img_timepoint is set from --img2img_timepoint (default 13, matching MindEye2 published).
+# Keeps the last N of 25 sigmas; higher = more refinement freedom.
+# Variable is already defined via globals() from args.
 base_engine.sampler.guider.scale = 5 # 5 # cfg
 def denoiser(x, sigma, c): return base_engine.denoiser(base_engine.model, x, sigma, c)
 
@@ -222,12 +233,29 @@ if plotting or num_samples>1:
 # In[31]:
 
 
-all_enhancedrecons = None
+# Per-sample resume: scan evals/{model_name}/enhanced_parts/ for already-done
+# samples, skip them, write each new sample atomically. Lets multi-pass
+# wall-time chained jobs (sbatch afterany) resume from prior progress.
+import glob
+enhanced_parts_dir = f"evals/{model_name}/enhanced_parts"
+os.makedirs(enhanced_parts_dir, exist_ok=True)
+existing_enhanced = {
+    int(os.path.basename(p).split("_")[-1].split(".")[0])
+    for p in glob.glob(f"{enhanced_parts_dir}/sample_*.pt")
+}
+if existing_enhanced:
+    print(f"[resume] Found {len(existing_enhanced)} completed enhanced samples in "
+          f"{enhanced_parts_dir}; skipping them.")
+
 for img_idx in tqdm(range(len(all_recons))):
+    if img_idx in existing_enhanced:
+        continue
     with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.float16), base_engine.ema_scope():
         base_engine.sampler.num_steps = 25
 
-        image = all_recons[[img_idx]]
+        # Per-sample 768 upsample (was previously done eagerly over the whole stack at load time;
+        # at 9000 samples that intermediate is ~64 GB and OOMs the slurm job).
+        image = resize_768(all_recons[[img_idx]]).float()
 
         if plotting:
             if has_blurry_recons:
@@ -302,16 +330,34 @@ for img_idx in tqdm(range(len(all_recons))):
 
             samples = samples[which_sample]
 
-        samples = samples.cpu()[None]
-        if all_enhancedrecons is None:
-            all_enhancedrecons = samples
-        else:
-            all_enhancedrecons = torch.vstack((all_enhancedrecons, samples))
+        # Resize to 256 BEFORE saving so each part is ~0.79MB (vs ~7MB at 768).
+        # Keeps peak assembly RAM bounded (9000 × 256² ≈ 7GB instead of ~64GB).
+        samples = transforms.Resize((256, 256))(samples.cpu()[None]).float()
+        # Atomic per-sample save for resume.
+        part_path = f"{enhanced_parts_dir}/sample_{img_idx:05d}.pt"
+        tmp_path = part_path + ".tmp"
+        torch.save(samples, tmp_path)
+        os.replace(tmp_path, part_path)
 
-all_enhancedrecons = transforms.Resize((256,256))(all_enhancedrecons).float()
+# Assemble all per-sample parts into the final tensor.
+print(f"\n[parts] Assembling final enhanced tensor from {enhanced_parts_dir}...")
+part_paths = sorted(glob.glob(f"{enhanced_parts_dir}/sample_*.pt"))
+expected = len(all_recons)
+if len(part_paths) != expected:
+    print(f"[parts] WARNING: {len(part_paths)}/{expected} samples present. "
+          f"Successor will continue. Skipping final assembly this pass.")
+    sys.exit(0)
+# List-then-single-vstack is O(n); avoid the prior in-loop vstack pattern.
+all_enhancedrecons = torch.vstack([
+    torch.load(p) for p in tqdm(part_paths, desc="loading enhanced parts")
+])
+
 print("all_enhancedrecons", all_enhancedrecons.shape)
-torch.save(all_enhancedrecons,f"evals/{model_name}/{model_name}_all_enhancedrecons.pt")
-print(f"saved evals/{model_name}/{model_name}_all_enhancedrecons.pt")
+out_path = f"evals/{model_name}/{model_name}_all_enhancedrecons.pt"
+tmp_out = out_path + ".tmp"
+torch.save(all_enhancedrecons, tmp_out)
+os.replace(tmp_out, out_path)
+print(f"saved {out_path}")
 
 if not utils.is_interactive():
     sys.exit(0)

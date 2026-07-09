@@ -252,45 +252,118 @@ def select_annotations(annots, random=True):
 
 from generative_models.sgm.util import append_dims
 def unclip_recon(x, diffusion_engine, vector_suffix,
-                 num_samples=1, offset_noise_level=0.04):
+                 num_samples=1, offset_noise_level=0.04,
+                 init_image=None, img2img_timepoint=None):
+    """
+    Generate image reconstructions using the unCLIP diffusion model.
+
+    Two modes:
+      (a) noise→image (default): start from pure noise, denoise full schedule.
+      (b) img2img init (Brain-IT style): when init_image and img2img_timepoint
+          are provided, encode init_image via SDXL VAE, noise the latent to
+          the sigma at position img2img_timepoint (counted from the END of the
+          50-step schedule — larger N = more noise / more freedom), and
+          denoise only the remaining steps. This injects spatial structure
+          into the generation from the start, rather than relying on naive
+          75/25 pixel-space averaging or low-strength enhanced refinement.
+
+    Args:
+        x: CLIP embeddings [1, 256, 1664] from diffusion prior
+        diffusion_engine: The unCLIP DiffusionEngine
+        vector_suffix: ADM conditioning vector
+        num_samples: Number of samples to generate
+        offset_noise_level: Offset noise for generation
+        init_image: Optional [B,3,768,768] in [0,1]. When set together with
+            img2img_timepoint, used as Brain-IT-style structural init.
+        img2img_timepoint: int. Number of denoising steps to retain from the
+            END of the schedule. With num_steps=50: ~18-20 ≈ Brain-IT's
+            "moderate" strength; smaller = closer to identity (preserves
+            init), larger = more denoising freedom.
+    """
     assert x.ndim==3
     if x.shape[0]==1:
         x = x[[0]]
+    use_img2img = (init_image is not None and img2img_timepoint is not None
+                   and img2img_timepoint > 0)
     with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.float16), diffusion_engine.ema_scope():
-        z = torch.randn(num_samples,4,96,96).to(device) # starting noise, can change to VAE outputs of initial image for img2img
-
-        # clip_img_tokenized = clip_img_embedder(image) 
-        # tokens = clip_img_tokenized
+        # --- Conditioning ---
         token_shape = x.shape
         tokens = x
         c = {"crossattn": tokens.repeat(num_samples,1,1), "vector": vector_suffix.repeat(num_samples,1)}
-
         tokens = torch.randn_like(x)
         uc = {"crossattn": tokens.repeat(num_samples,1,1), "vector": vector_suffix.repeat(num_samples,1)}
-
         for k in c:
             c[k], uc[k] = map(lambda y: y[k][:num_samples].to(device), (c, uc))
-
-        noise = torch.randn_like(z)
-        sigmas = diffusion_engine.sampler.discretization(diffusion_engine.sampler.num_steps)
-        sigma = sigmas[0].to(z.device)
-
-        if offset_noise_level > 0.0:
-            noise = noise + offset_noise_level * append_dims(
-                torch.randn(z.shape[0], device=z.device), z.ndim
-            )
-        noised_z = z + noise * append_dims(sigma, z.ndim)
-        noised_z = noised_z / torch.sqrt(
-            1.0 + sigmas[0] ** 2.0
-        )  # Note: hardcoded to DDPM-like scaling. need to generalize later.
 
         def denoiser(x, sigma, c):
             return diffusion_engine.denoiser(diffusion_engine.model, x, sigma, c)
 
-        samples_z = diffusion_engine.sampler(denoiser, noised_z, cond=c, uc=uc)
+        # --- Build the initial latent + sigma schedule ---
+        sigmas_full = diffusion_engine.sampler.discretization(
+            diffusion_engine.sampler.num_steps).to(device)
+
+        if use_img2img:
+            # img2img init: encode init image, noise to chosen timepoint,
+            # truncate schedule to last N steps.
+            if img2img_timepoint >= len(sigmas_full):
+                raise ValueError(
+                    f"img2img_timepoint={img2img_timepoint} exceeds sampler schedule "
+                    f"length ({len(sigmas_full)}). Max usable is {len(sigmas_full) - 1}."
+                )
+            init_image_d = init_image.to(device).float()
+            if init_image_d.shape[-1] != 768:
+                from torchvision.transforms import Resize
+                init_image_d = Resize((768, 768), antialias=True)(init_image_d)
+            z_init = diffusion_engine.encode_first_stage(init_image_d * 2 - 1)
+            if z_init.shape[0] != num_samples:
+                z_init = z_init.repeat(num_samples, 1, 1, 1)
+            noise = torch.randn_like(z_init)
+            if offset_noise_level > 0.0:
+                noise = noise + offset_noise_level * append_dims(
+                    torch.randn(z_init.shape[0], device=device), z_init.ndim
+                )
+            sigma_at_tp = sigmas_full[-img2img_timepoint]
+            noised_z = (z_init + noise * append_dims(sigma_at_tp, z_init.ndim)) / \
+                       torch.sqrt(1.0 + sigmas_full[0] ** 2.0)
+            # Repeat per-step sigmas to batch shape so the classifier-free
+            # guider can torch.cat([sigma]*2) without hitting a 0-dim cat error.
+            sigmas_use = sigmas_full[-img2img_timepoint:].repeat(num_samples, 1)
+        else:
+            # Original noise→image
+            z = torch.randn(num_samples, 4, 96, 96).to(device)
+            noise = torch.randn_like(z)
+            sigma = sigmas_full[0]
+            if offset_noise_level > 0.0:
+                noise = noise + offset_noise_level * append_dims(
+                    torch.randn(z.shape[0], device=device), z.ndim
+                )
+            noised_z = z + noise * append_dims(sigma, z.ndim)
+            noised_z = noised_z / torch.sqrt(1.0 + sigmas_full[0] ** 2.0)
+            sigmas_use = None  # let sampler use its own num_steps
+
+        # --- Sample ---
+        if use_img2img:
+            # Manual step loop with truncated schedule (matches enhanced_recon_inference.py pattern).
+            orig_num_steps = diffusion_engine.sampler.num_steps
+            try:
+                diffusion_engine.sampler.num_steps = sigmas_use.shape[-1] - 1
+                noised_z, _, _, _, c, uc = diffusion_engine.sampler.prepare_sampling_loop(
+                    noised_z, cond=c, uc=uc,
+                    num_steps=diffusion_engine.sampler.num_steps,
+                )
+                for ts in range(diffusion_engine.sampler.num_steps):
+                    noised_z = diffusion_engine.sampler.sampler_step(
+                        sigmas_use[:, ts], sigmas_use[:, ts+1], denoiser, noised_z,
+                        cond=c, uc=uc, gamma=0,
+                    )
+                samples_z = noised_z
+            finally:
+                diffusion_engine.sampler.num_steps = orig_num_steps
+        else:
+            samples_z = diffusion_engine.sampler(denoiser, noised_z, cond=c, uc=uc)
+
         samples_x = diffusion_engine.decode_first_stage(samples_z)
         samples = torch.clamp((samples_x*.8+.2), min=0.0, max=1.0)
-        # samples = torch.clamp((samples_x + .5) / 2.0, min=0.0, max=1.0)
         return samples
 
 #  Numpy Utility 
