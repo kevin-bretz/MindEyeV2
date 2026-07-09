@@ -4,13 +4,28 @@
 
 ![](figs/recon_comparison_small_alt.png)<br>
 
+---
+
+## Extensions in this fork
+
+This fork extends MindEye2 with four additions, studied on **Subject 2** of the Natural Scenes Dataset. The base MindEye2 pipeline is unchanged; each extension is additive and documented with reproduction commands under [Reproducing the extensions](#reproducing-the-extensions).
+
+| Extension | Stage | Idea |
+|---|---|---|
+| **Semantic Auxiliary Loss (SemAux)** | fine-tuning | A CLIP text-space regularizer added to the fine-tuning loss, pulling a projector head on the backbone output toward a frozen CLIP-text embedding of a weak semantic label of the viewed image. |
+| **Brain-Optimized Inference (BOI / L-BOI / L-BOI v2)** | inference | Generate several SDXL image-to-image candidates and keep the one whose GNet-predicted fMRI response best matches the measured response — scored in raw voxel space (BOI) or in MindEye2's ridge-regression latent space (L-BOI). |
+| **Diffusion timepoint sweep** | inference | Initialize the unCLIP and SDXL refinement stages from the blurry reconstruction (encoded through the SDXL VAE) instead of pure noise, sweeping the start timepoints `T_unCLIP` and `T_SDXL`. |
+| **VLM caption ablation** | inference | Replace MindEye2's GIT refinement caption with Qwen2.5-VL captions under six prompting schemas, all captioning the ground-truth image as a best-case test of the caption source. |
+
+---
+
 ## ALICE HPC quick-start
 
 This fork has been adapted to run on the ALICE HPC cluster (Leiden University). If you are on ALICE, you only need four commands to reproduce the baseline. Elsewhere, use the generic [Installation](#installation) section below.
 
 ```bash
 # 1. Clone (put the repo somewhere with enough disk — /zfsstore, /data1, etc.)
-git clone https://github.com/KevinOliver99/MindEyeV2.git
+git clone https://github.com/kevin-bretz/MindEyeV2.git
 cd MindEyeV2/src
 
 # 2. Create the fmri venv and install all pinned dependencies.
@@ -90,7 +105,7 @@ The included `*.slurm` files (e.g. `finetune_subj01.slurm`, `recon_inference.slu
 2. Git clone this repository:
 
 ```
-git clone https://github.com/MedARC-AI/MindEyeV2.git
+git clone https://github.com/kevin-bretz/MindEyeV2.git
 cd MindEyeV2/src
 ```
 
@@ -137,6 +152,75 @@ If you are training MindEye2 on a single GPU on the full 40 sessions, expect tha
 - ```src/enhanced_recon_inference.ipynb``` will run the refinement stage for producing better looking reconstructions. These refined reconstructions are saved as *enhancedrecons.pt in the same folder used by recon_inference.ipynb. The unrefined reconstructions were saved as *recons.pt as part of the recon_inference.ipynb notebook.
 - ```src/final_evaluations.ipynb``` will visualize the saved reconstructions and compute quantitative metrics.
 - See .slurm files for example scripts for running the .ipynb notebooks as batch jobs submitted to Slurm job scheduling.
+
+## Reproducing the extensions
+
+All four extensions were evaluated on **Subject 2**, using the single-session fine-tuned baseline `finetuned_subj02_1sess_1024hid_low` as the starting reconstruction. Every `*.slurm` script hard-codes an absolute `cd .../src` path and writes logs to `slurms/%j.{out,err}` — edit the path to your own clone and create a `slurms/` directory before submitting.
+
+### 1. Semantic Auxiliary Loss (SemAux)
+
+SemAux adds a semantic regularizer to the subject-specific fine-tuning objective. A small projector head pools the MindEye2 backbone output and maps it into CLIP ViT-L/14 text-embedding space; the target is the frozen CLIP-text embedding of a weak semantic label of the viewed image. The auxiliary term is the cosine distance to that target, added to the MindEye2 loss with weight `λ_sem = 0.05`:
+
+```
+L_total = L_MindEye2 + 0.05 · L_SemAux
+```
+
+Setup used in the report: Subject 2, 1 training session, 150 epochs, global batch size 24, learning rate 3e-4.
+
+> **Note:** SemAux is a fine-tuning-time change that is **not part of this code snapshot** (it was developed separately from this repository). Its method and settings are documented here for completeness; the reproduction commands below cover the three inference-time extensions, whose code is included.
+
+### 2. Brain-Optimized Inference (BOI, L-BOI, L-BOI v2)
+
+Inference-time candidate selection over a trained MindEye2 model — the weights are not modified. From an initial reconstruction, each iteration generates `N` SDXL image-to-image candidates at a fixed noise level, scores each with a GNet forward encoder against the measured fMRI response, and keeps the best candidate as the next iteration's starting point.
+
+- **BOI Voxel** — scores in raw voxel space: `brain_optimized_inference.py`
+- **L-BOI / L-BOI v2** — scores in MindEye2's 1024-d ridge-regression latent space: `brain_optimized_inference_latent.py` (v2 starts from the *refined* recons with a gentler, shorter noise schedule)
+
+```bash
+# L-BOI v2 (Subject 2): N=8 candidates, T=3 iterations
+python brain_optimized_inference_latent.py \
+    --model_name=finetuned_subj02_1sess_1024hid_low --subj=2 --new_test \
+    --n_candidates=8 --n_iterations=3 --convergence_tol=0.05
+# or submit the batch script:  sbatch src/brain_opt_inference.slurm
+```
+
+Per-variant candidate count `N`, iteration count `T`, and noise schedule:
+
+| Variant | N | T | Noise schedule | Initialization |
+|---|---|---|---|---|
+| BOI Voxel | 8 | 5 | [20, 15, 12, 9, 6] | unrefined recons |
+| L-BOI | 8 | 5 | [20, 15, 12, 9, 6] | unrefined recons |
+| L-BOI v2 | 8 | 3 | [12, 9, 6] | refined recons |
+
+Requires the GNet encoder weights `gnet_multisubject.pt` in `--cache_dir`.
+
+### 3. Diffusion timepoint sweep
+
+Instead of starting the unCLIP stage from pure Gaussian noise, initialize it from the blurry reconstruction (encoded through the SDXL VAE) and begin denoising at an intermediate timepoint `T_unCLIP` (`recon_inference.py --use_img2img_init --img2img_timepoint`). The SDXL refinement stage exposes the same control as `T_SDXL` (`enhanced_recon_inference.py --img2img_timepoint`, default 13). Lower values preserve more of the brain-derived structure; higher values give the diffusion prior more freedom.
+
+```bash
+# T_unCLIP sweep (T_SDXL fixed at its default of 13)
+for tp in 10 15 20 25 30 35; do
+  sbatch --export=ALL,IMG2IMG_TIMEPOINT=$tp src/recon_inference_subj02_tpsweep.slurm
+done
+# the tp=15 job automatically chains the T_SDXL sweep over {8, 18, 23}
+```
+
+Each job runs `recon_inference.py` (unCLIP stage) → `enhanced_recon_inference.py` (SDXL stage) → `final_evals_subj_sweep.slurm` (metrics). The reported noise-init baseline is a standard run without `--use_img2img_init`.
+
+### 4. VLM caption ablation
+
+Swap the caption used during SDXL refinement. Both captioners see the ground-truth image, so only the caption text varies across rows. Schema 0 is the NSD ground-truth caption; schemas 1–6 use Qwen2.5-VL-72B-Instruct-AWQ (short, dense, tags, sentence+tags, style, positional); the GIT row uses MindEye2's frozen GIT model on the ground-truth image embedding. All rows refine at `T_SDXL = 15`.
+
+```bash
+# 1. Generate captions (7 schemas × 50 images; self-provisions a Qwen2.5-VL venv)
+sbatch src/caption_bakeoff_gen.slurm
+# 2. Re-refine the Subject-2 recons per caption at T_SDXL=15 and score
+sbatch --export=ALL,SOURCE_MODEL=finetuned_subj02_1sess_1024hid_low,SUBJ=2 \
+       src/caption_bakeoff_render_subj02.slurm
+```
+
+The leaderboard is written to `tables/caption_bakeoff_subj02.csv`. Requires the SDXL refinement checkpoint `zavychromaxl_v30.safetensors` (see [External models](#external-models-and-where-they-go)).
 
 ## FAQ
 
