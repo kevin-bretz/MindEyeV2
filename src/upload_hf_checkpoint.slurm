@@ -31,6 +31,7 @@ set -euo pipefail
 
 module load ALICE/default
 module load Python/3.11.5-GCCcore-13.2.0
+module load PyYAML/6.0.1-GCCcore-13.2.0   # provides `yaml` for huggingface_hub (not pip-installed in the fmri venv)
 module load CUDA/12.1.1 2>/dev/null || echo "(CUDA module unavailable; CPU-only upload is fine)"
 
 cd /home/s4483480/MindEye2/MindEyeV2/src
