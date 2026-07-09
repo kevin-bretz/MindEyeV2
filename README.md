@@ -52,7 +52,7 @@ huggingface-cli download kevin-bretz/mindeye2-subj02 \
     finetuned_subj02_1sess_1024hid_low/last.pth --local-dir train_logs
 ```
 
-This lands the checkpoint at `train_logs/finetuned_subj02_1sess_1024hid_low/last.pth`, ready for `recon_inference.py --model_name=finetuned_subj02_1sess_1024hid_low`. To publish checkpoints from your own training runs, use `upload_hf_checkpoint.slurm` on the [`alice`](../../tree/alice) branch.
+This lands the checkpoint at `train_logs/finetuned_subj02_1sess_1024hid_low/last.pth`, ready for `recon_inference.py --model_name=finetuned_subj02_1sess_1024hid_low`.
 
 **Downloaded automatically into `src/`:**
 
