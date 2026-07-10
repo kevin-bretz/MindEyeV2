@@ -80,7 +80,7 @@ This lands the checkpoint at `train_logs/finetuned_subj02_1sess_1024hid_low/last
   ```
   Then pass `--multisubject_ckpt=../train_logs/multisubject_subj01_1024hid_nolow_300ep` to `Train.py`.
 
-- **`zavychromaxl_v30.safetensors`** (only required by `enhanced_recon_inference.py`, the optional SDXL refinement stage). Not on the HF dataset — download it from [Civitai](https://civitai.com/models/119229) (v3.0) and drop it into `src/` next to the other `.pth`/`.ckpt` files. The script now reads it from `--cache_dir` (defaults to the current directory), so no code edits are needed.
+- **`zavychromaxl_v30.safetensors`** (only required by `enhanced_recon_inference.py`, the optional SDXL refinement stage). Not on the HF dataset — download it from [Civitai](https://civitai.com/models/119229) (v3.0) and drop it into `src/` next to the other `.pth`/`.ckpt` files. The script reads it from the `ZAVYCHROMAXL_PATH` environment variable, which defaults to `zavychromaxl_v30.safetensors` in the current directory, so no code edits are needed.
 
 **Fetched automatically at runtime by `transformers`** (needs internet on the machine, or warm the cache beforehand): `microsoft/git-large-coco`, `openai/clip-vit-base-patch32`, `openai/clip-vit-large-patch14`.
 
